@@ -4,14 +4,7 @@ import 'package:http/http.dart' as http;
 import '../models/track_model.dart';
 
 class YoutubeService {
-  static const List<String> _pipedInstances = [
-    'https://pipedapi.kavin.rocks',
-    'https://pipedapi.tokhmi.xyz',
-    'https://api.piped.projectsegfau.lt',
-    'https://piped-api.privacy.com.de',
-    'https://pipedapi.leptons.xyz',
-  ];
-
+  static const String _baseUrl = 'https://saavn.dev/api';
   static const Duration _requestTimeout = Duration(seconds: 15);
 
   final http.Client _client = http.Client();
@@ -22,216 +15,300 @@ class YoutubeService {
     }
 
     final encodedQuery = Uri.encodeQueryComponent(query);
-    Object? lastError;
+    final uri = Uri.parse('$_baseUrl/search/songs?query=$encodedQuery');
 
-    for (final baseUrl in _pipedInstances) {
-      try {
-        final uri = Uri.parse(
-          '$baseUrl/search?q=$encodedQuery&filter=music_songs',
+    try {
+      final response = await _client
+          .get(uri, headers: _defaultHeaders())
+          .timeout(_requestTimeout);
+
+      if (response.statusCode != 200) {
+        throw YoutubeServiceException(
+          'Search request failed with status ${response.statusCode}.',
         );
-
-        final response = await _client
-            .get(uri, headers: _defaultHeaders())
-            .timeout(_requestTimeout);
-
-        if (response.statusCode != 200) {
-          throw YoutubeServiceException(
-            'Search request failed with status ${response.statusCode}.',
-          );
-        }
-
-        final decoded = jsonDecode(response.body);
-        final List<dynamic> items = decoded is Map<String, dynamic>
-            ? (decoded['items'] as List<dynamic>? ?? [])
-            : (decoded is List<dynamic> ? decoded : []);
-
-        final List<TrackModel> tracks = [];
-
-        for (final item in items) {
-          if (item is! Map<String, dynamic>) continue;
-
-          final String? url = item['url'] as String?;
-          if (url == null || !url.contains('watch?v=')) {
-            continue;
-          }
-
-          final videoId = Uri.parse(url).queryParameters['v'];
-          if (videoId == null || videoId.isEmpty) {
-            continue;
-          }
-
-          final title = (item['title'] as String?)?.trim();
-          if (title == null || title.isEmpty) {
-            continue;
-          }
-
-          final author = (item['uploaderName'] as String?)?.trim() ??
-              'Unknown Artist';
-
-          final thumbnailUrl = (item['thumbnail'] as String?) ?? '';
-
-          final durationSeconds = item['duration'];
-          final duration = durationSeconds is int && durationSeconds > 0
-              ? Duration(seconds: durationSeconds)
-              : Duration.zero;
-
-          tracks.add(
-            TrackModel(
-              videoId: videoId,
-              title: title,
-              author: author,
-              thumbnailUrl: thumbnailUrl,
-              duration: duration,
-            ),
-          );
-        }
-
-        return tracks;
-      } catch (e) {
-        lastError = e;
-        continue;
       }
-    }
 
-    throw YoutubeServiceException(
-      'Failed to search videos on all available Piped instances: '
-      '${_cleanErrorMessage(lastError)}',
-    );
-  }
-
-  Future<String> getAudioStreamUrl(String videoId) async {
-    Object? lastError;
-
-    for (final baseUrl in _pipedInstances) {
-      try {
-        final uri = Uri.parse('$baseUrl/streams/$videoId');
-
-        final response = await _client
-            .get(uri, headers: _defaultHeaders())
-            .timeout(_requestTimeout);
-
-        if (response.statusCode != 200) {
-          throw YoutubeServiceException(
-            'Stream request failed with status ${response.statusCode}.',
-          );
-        }
-
-        final decoded = jsonDecode(response.body);
-        if (decoded is! Map<String, dynamic>) {
-          throw YoutubeServiceException(
-            'Unexpected response format from Piped instance.',
-          );
-        }
-
-        final List<dynamic> audioStreams =
-            decoded['audioStreams'] as List<dynamic>? ?? [];
-
-        if (audioStreams.isEmpty) {
-          throw YoutubeServiceException(
-            'No audio-only streams available for this video.',
-          );
-        }
-
-        final m4aStreams = audioStreams.where((s) {
-          if (s is! Map<String, dynamic>) return false;
-          final format = (s['format'] as String?)?.toLowerCase() ?? '';
-          final mimeType = (s['mimeType'] as String?)?.toLowerCase() ?? '';
-          return format.contains('m4a') || mimeType.contains('mp4a');
-        }).toList();
-
-        final candidateStreams =
-            m4aStreams.isNotEmpty ? m4aStreams : audioStreams;
-
-        Map<String, dynamic>? bestStream;
-        int bestBitrate = -1;
-
-        for (final stream in candidateStreams) {
-          if (stream is! Map<String, dynamic>) continue;
-          final bitrate = _parseBitrate(stream['bitrate']);
-          if (bitrate > bestBitrate) {
-            bestBitrate = bitrate;
-            bestStream = stream;
-          }
-        }
-
-        bestStream ??= candidateStreams.first as Map<String, dynamic>;
-
-        final streamUrl = bestStream['url'] as String?;
-        if (streamUrl == null || streamUrl.isEmpty) {
-          throw YoutubeServiceException(
-            'Selected audio stream has no playable URL.',
-          );
-        }
-
-        return streamUrl;
-      } catch (e) {
-        lastError = e;
-        continue;
-      }
-    }
-
-    throw YoutubeServiceException(
-      'Failed to extract audio stream on all available Piped instances: '
-      '${_cleanErrorMessage(lastError)}',
-    );
-  }
-
-  Future<TrackModel> getVideoDetails(String videoId) async {
-    Object? lastError;
-
-    for (final baseUrl in _pipedInstances) {
-      try {
-        final uri = Uri.parse('$baseUrl/streams/$videoId');
-
-        final response = await _client
-            .get(uri, headers: _defaultHeaders())
-            .timeout(_requestTimeout);
-
-        if (response.statusCode != 200) {
-          throw YoutubeServiceException(
-            'Video details request failed with status ${response.statusCode}.',
-          );
-        }
-
-        final decoded = jsonDecode(response.body);
-        if (decoded is! Map<String, dynamic>) {
-          throw YoutubeServiceException(
-            'Unexpected response format from Piped instance.',
-          );
-        }
-
-        final title = (decoded['title'] as String?)?.trim() ?? 'Unknown Title';
-        final author =
-            (decoded['uploader'] as String?)?.trim() ?? 'Unknown Artist';
-        final thumbnailUrl = (decoded['thumbnailUrl'] as String?) ?? '';
-        final durationSeconds = decoded['duration'];
-        final duration = durationSeconds is int && durationSeconds > 0
-            ? Duration(seconds: durationSeconds)
-            : Duration.zero;
-
-        return TrackModel(
-          videoId: videoId,
-          title: title,
-          author: author,
-          thumbnailUrl: thumbnailUrl,
-          duration: duration,
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        throw YoutubeServiceException(
+          'Unexpected response format from JioSaavn API.',
         );
-      } catch (e) {
-        lastError = e;
-        continue;
       }
+
+      if (decoded['success'] != true) {
+        throw YoutubeServiceException(
+          'JioSaavn API reported an unsuccessful search response.',
+        );
+      }
+
+      final data = decoded['data'] as Map<String, dynamic>?;
+      final List<dynamic> items =
+          (data?['results'] as List<dynamic>?) ?? [];
+
+      final List<TrackModel> tracks = [];
+
+      for (final item in items) {
+        if (item is! Map<String, dynamic>) continue;
+
+        final track = _parseSongItem(item);
+        if (track != null) {
+          tracks.add(track);
+        }
+      }
+
+      return tracks;
+    } on TimeoutException {
+      throw YoutubeServiceException(
+        'The search request timed out. Please check your connection and try again.',
+      );
+    } on YoutubeServiceException {
+      rethrow;
+    } catch (e) {
+      throw YoutubeServiceException(
+        'Failed to search songs: ${_cleanErrorMessage(e)}',
+      );
+    }
+  }
+
+  Future<String> getAudioStreamUrl(String songId) async {
+    final uri = Uri.parse('$_baseUrl/songs/$songId');
+
+    try {
+      final response = await _client
+          .get(uri, headers: _defaultHeaders())
+          .timeout(_requestTimeout);
+
+      if (response.statusCode != 200) {
+        throw YoutubeServiceException(
+          'Stream request failed with status ${response.statusCode}.',
+        );
+      }
+
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        throw YoutubeServiceException(
+          'Unexpected response format from JioSaavn API.',
+        );
+      }
+
+      if (decoded['success'] != true) {
+        throw YoutubeServiceException(
+          'JioSaavn API reported an unsuccessful song lookup.',
+        );
+      }
+
+      final data = decoded['data'] as List<dynamic>?;
+      if (data == null || data.isEmpty) {
+        throw YoutubeServiceException(
+          'No song data returned for this track.',
+        );
+      }
+
+      final songItem = data.first as Map<String, dynamic>;
+      final downloadUrls = songItem['downloadUrl'] as List<dynamic>?;
+
+      final streamUrl = _pickBestDownloadUrl(downloadUrls);
+      if (streamUrl == null) {
+        throw YoutubeServiceException(
+          'No playable audio stream available for this track.',
+        );
+      }
+
+      return streamUrl;
+    } on TimeoutException {
+      throw YoutubeServiceException(
+        'The stream request timed out. Please check your connection and try again.',
+      );
+    } on YoutubeServiceException {
+      rethrow;
+    } catch (e) {
+      throw YoutubeServiceException(
+        'Failed to extract audio stream: ${_cleanErrorMessage(e)}',
+      );
+    }
+  }
+
+  Future<TrackModel> getVideoDetails(String songId) async {
+    final uri = Uri.parse('$_baseUrl/songs/$songId');
+
+    try {
+      final response = await _client
+          .get(uri, headers: _defaultHeaders())
+          .timeout(_requestTimeout);
+
+      if (response.statusCode != 200) {
+        throw YoutubeServiceException(
+          'Song details request failed with status ${response.statusCode}.',
+        );
+      }
+
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        throw YoutubeServiceException(
+          'Unexpected response format from JioSaavn API.',
+        );
+      }
+
+      if (decoded['success'] != true) {
+        throw YoutubeServiceException(
+          'JioSaavn API reported an unsuccessful song lookup.',
+        );
+      }
+
+      final data = decoded['data'] as List<dynamic>?;
+      if (data == null || data.isEmpty) {
+        throw YoutubeServiceException(
+          'No song data returned for this track.',
+        );
+      }
+
+      final songItem = data.first as Map<String, dynamic>;
+      final track = _parseSongItem(songItem);
+
+      if (track == null) {
+        throw YoutubeServiceException(
+          'Song data could not be parsed into a track.',
+        );
+      }
+
+      return track;
+    } on TimeoutException {
+      throw YoutubeServiceException(
+        'The song details request timed out. Please check your connection and try again.',
+      );
+    } on YoutubeServiceException {
+      rethrow;
+    } catch (e) {
+      throw YoutubeServiceException(
+        'Failed to fetch song details: ${_cleanErrorMessage(e)}',
+      );
+    }
+  }
+
+  TrackModel? _parseSongItem(Map<String, dynamic> item) {
+    final String? songId = item['id'] as String?;
+    if (songId == null || songId.isEmpty) {
+      return null;
     }
 
-    throw YoutubeServiceException(
-      'Failed to fetch video details on all available Piped instances: '
-      '${_cleanErrorMessage(lastError)}',
+    final title = (item['name'] as String?)?.trim();
+    if (title == null || title.isEmpty) {
+      return null;
+    }
+
+    final author = _extractPrimaryArtist(item);
+    final thumbnailUrl = _pickBestImageUrl(item['image'] as List<dynamic>?);
+
+    final durationSeconds = item['duration'];
+    final duration = _parseDurationSeconds(durationSeconds);
+
+    return TrackModel(
+      videoId: songId,
+      title: title,
+      author: author,
+      thumbnailUrl: thumbnailUrl ?? '',
+      duration: duration,
     );
   }
 
-  int _parseBitrate(dynamic value) {
-    if (value is int) return value;
-    if (value is String) return int.tryParse(value) ?? 0;
+  String _extractPrimaryArtist(Map<String, dynamic> item) {
+    try {
+      final artists = item['artists'] as Map<String, dynamic>?;
+      final primary = artists?['primary'] as List<dynamic>?;
+
+      if (primary != null && primary.isNotEmpty) {
+        final firstArtist = primary.first;
+        if (firstArtist is Map<String, dynamic>) {
+          final name = (firstArtist['name'] as String?)?.trim();
+          if (name != null && name.isNotEmpty) {
+            return name;
+          }
+        }
+      }
+    } catch (_) {
+      // Fall through to default below.
+    }
+
+    return 'Unknown Artist';
+  }
+
+  String? _pickBestImageUrl(List<dynamic>? images) {
+    if (images == null || images.isEmpty) {
+      return null;
+    }
+
+    Map<String, dynamic>? best;
+    int bestScore = -1;
+
+    for (final image in images) {
+      if (image is! Map<String, dynamic>) continue;
+
+      final quality = (image['quality'] as String?) ?? '';
+      final score = _qualityToScore(quality);
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = image;
+      }
+    }
+
+    best ??= images.last as Map<String, dynamic>?;
+    return best?['url'] as String?;
+  }
+
+  int _qualityToScore(String quality) {
+    final normalized = quality.toLowerCase().replaceAll('x', '');
+    final match = RegExp(r'(\d+)').firstMatch(normalized);
+    if (match != null) {
+      return int.tryParse(match.group(1) ?? '0') ?? 0;
+    }
     return 0;
+  }
+
+  String? _pickBestDownloadUrl(List<dynamic>? downloadUrls) {
+    if (downloadUrls == null || downloadUrls.isEmpty) {
+      return null;
+    }
+
+    Map<String, dynamic>? best;
+    int bestBitrate = -1;
+
+    for (final entry in downloadUrls) {
+      if (entry is! Map<String, dynamic>) continue;
+
+      final quality = (entry['quality'] as String?) ?? '';
+      final bitrate = _parseKbps(quality);
+
+      if (bitrate > bestBitrate) {
+        bestBitrate = bitrate;
+        best = entry;
+      }
+    }
+
+    best ??= downloadUrls.last as Map<String, dynamic>?;
+    final url = best?['url'] as String?;
+    return (url != null && url.isNotEmpty) ? url : null;
+  }
+
+  int _parseKbps(String quality) {
+    final match = RegExp(r'(\d+)').firstMatch(quality);
+    if (match != null) {
+      return int.tryParse(match.group(1) ?? '0') ?? 0;
+    }
+    return 0;
+  }
+
+  Duration _parseDurationSeconds(dynamic value) {
+    if (value is int && value > 0) {
+      return Duration(seconds: value);
+    }
+    if (value is String) {
+      final parsed = int.tryParse(value);
+      if (parsed != null && parsed > 0) {
+        return Duration(seconds: parsed);
+      }
+    }
+    return Duration.zero;
   }
 
   Map<String, String> _defaultHeaders() {
