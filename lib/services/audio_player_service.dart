@@ -13,10 +13,12 @@ class AudioPlayerService extends ChangeNotifier {
   TrackModel? _currentTrack;
   PlayerLoadingState _loadingState = PlayerLoadingState.idle;
   String? _errorMessage;
+  bool _isRateLimitError = false;
 
   TrackModel? get currentTrack => _currentTrack;
   PlayerLoadingState get loadingState => _loadingState;
   String? get errorMessage => _errorMessage;
+  bool get isRateLimitError => _isRateLimitError;
 
   AudioPlayer get player => _audioPlayer;
 
@@ -52,6 +54,7 @@ class AudioPlayerService extends ChangeNotifier {
     _currentTrack = track;
     _loadingState = PlayerLoadingState.loading;
     _errorMessage = null;
+    _isRateLimitError = false;
     notifyListeners();
 
     try {
@@ -60,18 +63,28 @@ class AudioPlayerService extends ChangeNotifier {
       );
       _currentTrack = track.copyWith(streamUrl: streamUrl);
 
-      await _audioPlayer.setAudioSource(
-        AudioSource.uri(Uri.parse(streamUrl)),
-      );
+      await _audioPlayer.setUrl(streamUrl);
 
       _loadingState = PlayerLoadingState.ready;
       notifyListeners();
       await _audioPlayer.play();
+    } on YoutubeServiceException catch (e) {
+      _loadingState = PlayerLoadingState.error;
+      _errorMessage = e.message;
+      _isRateLimitError = false;
+      notifyListeners();
     } catch (e) {
       _loadingState = PlayerLoadingState.error;
-      _errorMessage = e.toString();
+      _errorMessage = 'Could not play this track. Please try again.';
+      _isRateLimitError = false;
       notifyListeners();
     }
+  }
+
+  Future<void> retryCurrentTrack() async {
+    final track = _currentTrack;
+    if (track == null) return;
+    await playTrack(track);
   }
 
   Future<void> togglePlayPause() async {
