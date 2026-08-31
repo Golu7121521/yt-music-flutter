@@ -16,6 +16,28 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Show repository contents (debug)
+        run: |
+          echo "Repository root contents:"
+          ls -la
+          echo ""
+          echo "Searching for pubspec.yaml anywhere in the repo:"
+          find . -maxdepth 4 -name "pubspec.yaml" -not -path "*/build/*"
+
+      - name: Locate Flutter project root
+        id: locate
+        run: |
+          PUBSPEC_PATH=$(find . -maxdepth 4 -name "pubspec.yaml" -not -path "*/build/*" | head -n 1)
+          if [ -z "$PUBSPEC_PATH" ]; then
+            echo "ERROR: No pubspec.yaml found in this repository."
+            echo "Make sure the contents of the yt_stream_player folder (pubspec.yaml, lib/, android/, etc.) are committed at the repository root, not nested inside another folder."
+            exit 1
+          fi
+          PROJECT_DIR=$(dirname "$PUBSPEC_PATH")
+          echo "Found pubspec.yaml at: $PUBSPEC_PATH"
+          echo "Using project directory: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -33,20 +55,25 @@ jobs:
         run: flutter doctor -v
 
       - name: Install dependencies
+        working-directory: ${{ steps.locate.outputs.project_dir }}
         run: flutter pub get
 
       - name: Analyze project
+        working-directory: ${{ steps.locate.outputs.project_dir }}
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
         continue-on-error: true
 
       - name: Run tests
+        working-directory: ${{ steps.locate.outputs.project_dir }}
         run: flutter test
         continue-on-error: true
 
       - name: Build release APK
+        working-directory: ${{ steps.locate.outputs.project_dir }}
         run: flutter build apk --release
 
       - name: Build split-per-abi APKs
+        working-directory: ${{ steps.locate.outputs.project_dir }}
         run: flutter build apk --release --split-per-abi
 
       - name: Upload APK artifacts
@@ -54,7 +81,6 @@ jobs:
         with:
           name: app-release-apks
           path: |
-            build/app/outputs/flutter-apk/*.apk
+            ${{ steps.locate.outputs.project_dir }}/build/app/outputs/flutter-apk/*.apk
           if-no-files-found: error
           retention-days: 14
-
