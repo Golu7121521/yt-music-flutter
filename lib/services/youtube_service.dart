@@ -4,8 +4,11 @@ import 'package:http/http.dart' as http;
 import '../models/track_model.dart';
 
 class YoutubeService {
-  static const String _baseUrl = 'https://saavn.dev/api';
-  static const Duration _requestTimeout = Duration(seconds: 15);
+  // Aapka naya Render server URL
+  static const String _baseUrl = 'https://jiosaavn-api-dnva.onrender.com/api';
+  
+  // Timeout 30 seconds kar diya taaki free server on hone ka time mil sake
+  static const Duration _requestTimeout = Duration(seconds: 30);
 
   final http.Client _client = http.Client();
 
